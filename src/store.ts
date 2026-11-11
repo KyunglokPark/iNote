@@ -117,6 +117,14 @@ export function setPageDate(id: string, date: string) {
   saveTreeSoon();
 }
 
+export function setPageGroup(id: string, group: string | undefined) {
+  const p = getPage(id);
+  if (!p || p.group === group) return;
+  p.group = group;
+  p.updatedAt = Date.now();
+  saveTreeSoon();
+}
+
 export function setPageIcon(id: string, icon: string) {
   const p = getPage(id);
   if (!p) return;
@@ -179,7 +187,12 @@ export function movePage(id: string, newParent: string | null, beforeId: string 
 export async function loadDoc(id: string): Promise<PageDoc> {
   const raw = await invoke<string>("page_load", { id });
   const data = JSON.parse(raw);
-  if (data && Array.isArray(data.blocks)) return data as PageDoc;
+  if (data && Array.isArray(data.blocks)) {
+    const doc = data as PageDoc;
+    // 블록이 0개로 저장된 문서는 클릭할 곳이 없어 편집 불가가 되므로 빈 문단 보정
+    if (doc.blocks.length === 0) doc.blocks.push({ id: genId(), type: "p", text: "" });
+    return doc;
+  }
   // 새 문서: 빈 문단 하나
   return { id, blocks: [{ id: genId(), type: "p", text: "" }], updatedAt: Date.now() };
 }

@@ -33,6 +33,8 @@ export interface EditorHooks {
   getChildren(id: string): PageMeta[];
   createChildPage(parentId: string, title: string, group?: string): PageMeta;
   setPageDate?(id: string, date: string): void;
+  setPageGroup?(id: string, group: string | undefined): void;
+  pickIcon?(id: string, anchor: HTMLElement): void;
 }
 
 export class Editor {
@@ -44,6 +46,10 @@ export class Editor {
   private menuFilter = "";
   private menuIndex = 0;
   private dragId: string | null = null;
+  // Ctrl+Z 되돌리기 — 변경 직전 블록 상태 스냅샷 (현재 페이지 한정)
+  private undoStack: string[] = [];
+  private redoStack: string[] = [];
+  private lastEditAt = 0;
 
   constructor(root: HTMLElement, menu: HTMLElement, hooks: EditorHooks) {
     this.root = root;
@@ -54,10 +60,67 @@ export class Editor {
       // 핸들 클릭은 pointerup에서 방금 블록 메뉴를 연 직후라 닫으면 안 됨
       if (!this.menu.contains(t) && !t.closest(".handle")) this.closeMenu();
     });
+    document.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || !this.doc) return;
+      // 제목·검색 같은 일반 입력칸은 브라우저 기본 undo에 맡긴다
+      const t = e.target as HTMLElement;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        this.undo();
+      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+        e.preventDefault();
+        this.redo();
+      }
+    });
+  }
+
+  /** 변경 직전 호출 — 현재 블록 상태를 되돌리기 스택에 저장 */
+  private snapshot() {
+    if (!this.doc) return;
+    this.undoStack.push(JSON.stringify(this.doc.blocks));
+    if (this.undoStack.length > 100) this.undoStack.shift();
+    this.redoStack.length = 0;
+  }
+
+  /** 타이핑은 묶어서 — 0.8초 이상 쉬었다 치기 시작할 때만 스냅샷 */
+  private snapshotTyping() {
+    const now = Date.now();
+    if (now - this.lastEditAt > 800) this.snapshot();
+    this.lastEditAt = now;
+  }
+
+  private undo() {
+    if (!this.doc || !this.undoStack.length) return;
+    this.redoStack.push(JSON.stringify(this.doc.blocks));
+    this.doc.blocks = JSON.parse(this.undoStack.pop()!);
+    this.render();
+    this.save();
+  }
+
+  private redo() {
+    if (!this.doc || !this.redoStack.length) return;
+    this.undoStack.push(JSON.stringify(this.doc.blocks));
+    this.doc.blocks = JSON.parse(this.redoStack.pop()!);
+    this.render();
+    this.save();
   }
 
   setDoc(doc: PageDoc | null) {
     this.doc = doc;
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    // 불변식 보정: 페이지 링크 블록이 가리키는 페이지는 그 블록 소속 —
+    // 갤러리/노트 목록/캘린더에 중복으로 나타나지 않게 한다 (기존 데이터 자동 수선)
+    if (doc) {
+      for (const b of doc.blocks) {
+        if (b.type === "page" && b.pageId) {
+          const meta = this.hooks.getMeta(b.pageId);
+          if (meta && !meta.group) this.hooks.setPageGroup?.(b.pageId, b.id);
+        }
+      }
+    }
     this.closeMenu();
     this.render();
   }
@@ -79,6 +142,23 @@ export class Editor {
     if (!this.doc) return [];
     const kids = this.hooks.getChildren(this.doc.id);
     return b.grouped ? kids.filter((k) => k.group === b.id) : kids.filter((k) => !k.group);
+  }
+
+  /** 본문 아래 빈 공간 클릭 — 마지막 블록이 빈 문단이면 포커스, 아니면 새 문단 추가 */
+  appendAtEnd() {
+    if (!this.doc) return;
+    const last = this.doc.blocks[this.doc.blocks.length - 1];
+    if (last && last.type === "p" && !last.text) {
+      const bc = this.rowOf(last.id)?.querySelector<HTMLElement>(".bc");
+      bc?.focus();
+      return;
+    }
+    this.snapshot();
+    const nb: Block = { id: genId(), type: "p", text: "", indent: 0 };
+    this.doc.blocks.push(nb);
+    this.root.appendChild(this.makeRow(nb));
+    this.save();
+    this.rowOf(nb.id)?.querySelector<HTMLElement>(".bc")?.focus();
   }
 
   focusFirst() {
@@ -155,8 +235,14 @@ export class Editor {
       const link = document.createElement("div");
       link.className = "page-link";
       const icon = document.createElement("span");
-      icon.className = "pl-icon";
+      icon.className = "pl-icon icon-btn";
+      icon.title = "아이콘 바꾸기";
       icon.textContent = meta?.icon || "📄";
+      if (meta)
+        icon.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.hooks.pickIcon?.(meta.id, icon);
+        });
       const name = document.createElement("span");
       name.className = "pl-name";
       name.textContent = meta ? meta.title || "제목 없음" : "(삭제된 페이지)";
@@ -177,8 +263,13 @@ export class Editor {
         const card = document.createElement("div");
         card.className = "g-card";
         const ic = document.createElement("div");
-        ic.className = "g-icon";
+        ic.className = "g-icon icon-btn";
+        ic.title = "아이콘 바꾸기";
         ic.textContent = k.icon || "📄";
+        ic.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.hooks.pickIcon?.(k.id, ic);
+        });
         const nm = document.createElement("div");
         nm.className = "g-name";
         nm.textContent = k.title || "제목 없음";
@@ -214,8 +305,13 @@ export class Editor {
         const rowEl = document.createElement("div");
         rowEl.className = "nl-row";
         const ic = document.createElement("span");
-        ic.className = "nl-icon";
+        ic.className = "nl-icon icon-btn";
+        ic.title = "아이콘 바꾸기";
         ic.textContent = k.icon || "📄";
+        ic.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.hooks.pickIcon?.(k.id, ic);
+        });
         const nm = document.createElement("span");
         nm.className = "nl-name";
         nm.textContent = k.title || "제목 없음";
@@ -261,6 +357,7 @@ export class Editor {
       caret.title = "접기/펼치기";
       caret.addEventListener("mousedown", (e) => e.preventDefault());
       caret.addEventListener("click", () => {
+        this.snapshot();
         b.open = b.open === false ? true : false;
         caret.textContent = b.open === false ? "▸" : "▾";
         this.applyVisibility();
@@ -276,6 +373,7 @@ export class Editor {
       chk.className = "marker";
       chk.checked = !!b.checked;
       chk.addEventListener("change", () => {
+        this.snapshot();
         b.checked = chk.checked;
         row.classList.toggle("done", chk.checked);
         this.save();
@@ -307,6 +405,7 @@ export class Editor {
     if (b.font === "serif") bc.style.fontFamily = '"Noto Serif KR", Batang, serif';
     else if (b.font === "mono") bc.style.fontFamily = '"Cascadia Code", "D2Coding", Consolas, monospace';
     bc.dataset.ph = this.placeholderFor(b.type);
+    bc.addEventListener("beforeinput", () => this.snapshotTyping());
     bc.addEventListener("input", () => {
       b.text = bc.textContent ?? "";
       this.maybeMarkdownShortcut(b, bc);
@@ -372,6 +471,7 @@ export class Editor {
       const cur = b.indent ?? 0;
       const next = e.shiftKey ? Math.max(0, cur - 1) : Math.min(MAX_INDENT, cur + 1);
       if (next !== cur) {
+        this.snapshot();
         b.indent = next;
         const row = this.rowOf(b.id)!;
         row.dataset.indent = String(next);
@@ -485,6 +585,7 @@ export class Editor {
 
   private splitBlock(b: Block, bc: HTMLElement) {
     if (!this.doc) return;
+    this.snapshot();
     const [before, after] = splitAtCaret(bc);
     b.text = before;
     bc.textContent = before;
@@ -506,6 +607,7 @@ export class Editor {
 
   private insertAfter(id: string, type: BlockType) {
     if (!this.doc) return;
+    this.snapshot();
     const src = this.doc.blocks[this.idx(id)];
     const nb: Block = { id: genId(), type, text: "", indent: src?.indent ?? 0 };
     const i = this.idx(id);
@@ -522,6 +624,7 @@ export class Editor {
     if (!this.doc) return;
     const i = this.idx(id);
     if (i < 0) return;
+    this.snapshot();
     if (this.doc.blocks.length === 1) {
       const only = this.doc.blocks[0];
       only.type = "p";
@@ -547,6 +650,7 @@ export class Editor {
   private mergeWithPrev(b: Block) {
     if (!this.doc) return;
     const i = this.idx(b.id);
+    this.snapshot();
     // 들여쓰기 → 먼저 내어쓰기, 그다음 종류 해제, 마지막으로 병합
     if ((b.indent ?? 0) > 0) {
       b.indent = (b.indent ?? 0) - 1;
@@ -648,13 +752,15 @@ export class Editor {
   }
 
   private applyMenu(b: Block, bc: HTMLElement, type: BlockType) {
+    this.snapshot();
     b.text = "";
     bc.textContent = "";
     this.closeMenu();
     if (type === "page") {
-      // 새 하위 페이지를 만들고 링크 블록으로
+      // 새 하위 페이지를 만들고 링크 블록으로 — 이 블록 소속로 만들어
+      // 다른 갤러리/목록/캘린더에 섞여 나오지 않게 한다
       if (!this.doc) return;
-      const child = this.hooks.createChildPage(this.doc.id, "");
+      const child = this.hooks.createChildPage(this.doc.id, "", b.id);
       b.pageId = child.id;
     }
     // 새로 만드는 표시 블록은 자기 소속 페이지만 보여주는 그룹 모드
@@ -684,9 +790,10 @@ export class Editor {
     title.textContent = `${Y}년 ${M}월`;
     const nav = document.createElement("span");
     nav.className = "cal-nav";
-    const mkNav = (txt: string, dM: number | null) => {
+    const mkNav = (txt: string, dM: number | null, cls?: string) => {
       const btn = document.createElement("button");
       btn.textContent = txt;
+      if (cls) btn.className = cls;
       btn.addEventListener("click", () => {
         if (dM === null) {
           const t = new Date();
@@ -702,7 +809,7 @@ export class Editor {
       });
       return btn;
     };
-    nav.append(mkNav("‹", -1), mkNav("오늘", null), mkNav("›", +1));
+    nav.append(mkNav("‹", -1), mkNav("오늘", null, "cal-today-btn"), mkNav("›", +1));
     head.append(title, nav);
     wrap.appendChild(head);
 
@@ -719,33 +826,48 @@ export class Editor {
     start.setDate(1 - first.getDay());
     const kids = this.kidsFor(b);
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const newPageAt = (iso: string) => {
+      if (!this.doc) return;
+      const pNew = this.hooks.createChildPage(this.doc.id, "", b.grouped ? b.id : undefined);
+      this.hooks.setPageDate?.(pNew.id, iso);
+      this.hooks.openPage(pNew.id);
+    };
     for (let i = 0; i < 42; i++) {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
       const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const cell = document.createElement("div");
-      cell.className = "cal-cell" + (d.getMonth() !== M - 1 ? " other" : "") + (iso === today ? " today" : "");
+      cell.className =
+        "cal-cell" + (d.getMonth() !== M - 1 ? " other" : "") + (iso === today ? " today" : "");
+
+      // 호버 시 좌상단 ＋ (그 날짜로 새 페이지)
+      const addBtn = document.createElement("button");
+      addBtn.className = "cal-add";
+      addBtn.textContent = "＋";
+      addBtn.title = "이 날짜에 새 페이지";
+      addBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        newPageAt(iso);
+      });
+      cell.appendChild(addBtn);
+
       const num = document.createElement("div");
       num.className = "cal-num";
-      num.textContent = String(d.getDate());
+      // 매월 1일은 "n월 1일"로 표기
+      num.textContent = d.getDate() === 1 ? `${d.getMonth() + 1}월 1일` : String(d.getDate());
       cell.appendChild(num);
       for (const k of kids.filter((x) => x.date === iso)) {
         const ev = document.createElement("div");
         ev.className = "cal-ev";
         ev.textContent = `${k.icon || "📄"} ${k.title || "제목 없음"}`;
+        ev.title = k.title || "제목 없음";
         ev.addEventListener("click", (e) => {
           e.stopPropagation();
           this.hooks.openPage(k.id);
         });
         cell.appendChild(ev);
       }
-      // 빈 날짜 더블클릭 → 그 날짜로 새 페이지
-      cell.addEventListener("dblclick", () => {
-        if (!this.doc) return;
-        const pNew = this.hooks.createChildPage(this.doc.id, "", b.grouped ? b.id : undefined);
-        this.hooks.setPageDate?.(pNew.id, iso);
-        this.hooks.openPage(pNew.id);
-      });
+      cell.addEventListener("dblclick", () => newPageAt(iso));
       grid.appendChild(cell);
     }
     wrap.appendChild(grid);
@@ -814,6 +936,7 @@ export class Editor {
       if (!this.doc || !this.dragId) return;
       const from = this.idx(this.dragId);
       if (from < 0) return;
+      this.snapshot();
       const [grabbed] = this.doc.blocks.splice(from, 1);
       let to = beforeId ? this.doc.blocks.findIndex((x) => x.id === beforeId) : this.doc.blocks.length;
       if (to < 0) to = this.doc.blocks.length;
@@ -855,6 +978,7 @@ export class Editor {
       c.textContent = label;
       c.addEventListener("mousedown", (e) => {
         e.preventDefault();
+        this.snapshot();
         apply();
         this.closeMenu();
         const fresh = this.makeRow(b);
@@ -886,6 +1010,26 @@ export class Editor {
     const r2 = chipRow();
     for (const [label, f] of fonts)
       chip(r2, label, b.font === f, () => (b.font = f));
+
+    // 텍스트 블록 → 하위 페이지로 전환 (텍스트가 제목이 되고, 블록은 페이지 링크로)
+    const textual = ["p", "h1", "h2", "h3", "todo", "bullet", "number", "quote", "toggle"];
+    if (textual.includes(b.type)) {
+      const toPage = document.createElement("div");
+      toPage.className = "sm-item bm-topage";
+      toPage.textContent = "📄 페이지로 전환";
+      toPage.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        this.closeMenu();
+        if (!this.doc) return;
+        this.snapshot();
+        const child = this.hooks.createChildPage(this.doc.id, b.text.trim(), b.id);
+        b.pageId = child.id;
+        b.text = "";
+        b.checked = undefined;
+        this.changeType(b, "page");
+      });
+      this.menu.appendChild(toPage);
+    }
 
     const del = document.createElement("div");
     del.className = "sm-item bm-del";

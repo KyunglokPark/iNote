@@ -16,6 +16,7 @@ import {
   saveDocNow,
   setPageCover,
   setPageDate,
+  setPageGroup,
   setPageIcon,
 } from "./store";
 import { Tree } from "./tree";
@@ -42,6 +43,8 @@ const hooks: EditorHooks = {
     return p;
   },
   setPageDate: (id, date) => setPageDate(id, date),
+  setPageGroup: (id, group) => setPageGroup(id, group),
+  pickIcon: (id, anchor) => openEmojiPickerFor(id, anchor),
 };
 const editor = new Editor(blocksEl, menuEl, hooks);
 
@@ -139,6 +142,11 @@ titleEl.addEventListener("keydown", (e) => {
     e.preventDefault();
     editor.focusFirst();
   }
+});
+
+// 본문 아래 여백 클릭 → 마지막 블록에 이어서 쓰기 (노트 어디서든 바로 입력 가능)
+docEl.addEventListener("click", (e) => {
+  if (e.target === docEl) editor.appendAtEnd();
 });
 
 document.getElementById("sb-new")!.addEventListener("click", () => {
@@ -268,47 +276,66 @@ function paintIcon(icon?: string) {
   }
 }
 
-// 자주 쓸 만한 이모지 모음
-const EMOJIS = (
-  "📄 📝 📌 📍 📎 📚 📖 📁 🗂 🗒 🗃 🗄 📋 ✅ ☑️ ⭐ 🌟 💡 🔥 🚀 🧠 💻 🖥 ⌨️ 🖱 📱 ☎️ 🛠 ⚙️ 🔧 🔨 🧪 🧬 🔬 🔭 🐞 📊 📈 📉 🗓 📅 ⏰ ⏳ 🏠 🏢 🏭 🏦 🏫 🏥 💰 💵 💳 🧾 📦 ✈️ 🚗 🚕 🚆 🛳 🍚 🍜 🍕 🍔 🍺 ☕ 🍵 🎯 🎨 🎵 🎬 🎮 ⚽ 🏀 🏃 💪 🧘 ❤️ 💙 💚 💛 🧡 💜 🤍 🖤 🙏 👍 👎 👀 ✨ ❗ ❓ ⚠️ 🚫 ❌ ⭕ 🔒 🔓 🔑 🛡 🌍 🌏 🗺 🧭 🌱 🌲 🌸 🌞 🌙 ⛅ 🌧 ⛄ 🎁 🎉 🎂 🏆 🥇 🥈 🥉 🔖 🏷 💬 💭 📣 📢 🔔 🔕 💤 ♻️ 🧹 🩺 💊 🧲 🎲 🧩"
-).split(" ");
+// 아이콘 모음 — 카테고리 섹션별
+const EMOJI_SECTIONS: { name: string; list: string }[] = [
+  { name: "업무", list: "📄 📝 📋 📌 📍 📎 🖇 📁 🗂 🗃 🗄 🗒 📑 📚 📖 📰 ✉️ 📧 📤 📥 📦 🏷 🔖 💼 🗑 ✂️ 📏 📐 ✏️ 🖊 🖨 ☎️ 📞" },
+  { name: "개발", list: "💻 🖥 ⌨️ 🖱 📱 ⌚ 🛠 ⚙️ 🔧 🔨 🧪 🧬 🔬 🔭 🐞 🤖 👾 🔌 💾 💿 🛰 📡 🧲 🔋" },
+  { name: "주식·금융", list: "📈 📉 📊 💰 💵 💴 💶 💷 💳 🪙 🏦 🧾 💹 💲 🤑 🏧 ⚖️" },
+  { name: "일정", list: "🗓 📅 📆 ⏰ ⏱ ⏳ ⌛ 🕐 🔔 🔕 📣 📢 💬 💭" },
+  { name: "여행", list: "✈️ 🛫 🛬 🚀 🚗 🚕 🚙 🚌 🚐 🚆 🚄 🚉 🚢 🛳 ⛴ 🚤 🚲 🛵 🏍 🗺 🧭 🧳 🎒 🏨 🏖 🏝 ⛱ 🗻 ⛰ 🏔 🏕 ⛺ 🌋 🗽 🗼 ⛩ 🕌 ⛪ 🏰 🎡 🎢 ⛽ 🚏" },
+  { name: "일상", list: "🏠 🏡 🏢 🏫 🏥 🏪 🛏 🛋 🚿 🛁 🧺 🧹 🧻 🧼 🪥 👕 👖 👗 👟 👠 🧢 👒 👓 🕶 ☂️ 🌂 🔑 🚪 🪑 💡 🕯 🧸 🎁 🛒 🧯 🩺 💊 💉 🚬 📺 📻" },
+  { name: "음식", list: "☕ 🍵 🧋 🥤 🍺 🍻 🍷 🥂 🥃 🍶 🍾 🍚 🍜 🍲 🍛 🍕 🍔 🍟 🌭 🥪 🌮 🍗 🍖 🥩 🥓 🍣 🍱 🥟 🍙 🍘 🥗 🍝 🍞 🥐 🥖 🧀 🥚 🍳 🥞 🧇 🍦 🍰 🎂 🍮 🍩 🍪 🍫 🍬 🍭 🍯 🍎 🍐 🍊 🍋 🍌 🍇 🍓 🍒 🍑 🍍 🥝 🍉 🍈 🥑 🍅 🥕 🌽 🥔 🧄 🧅 🌶" },
+  { name: "취미·운동", list: "⚽ 🏀 ⚾ 🥎 🎾 🏐 🏈 🏉 🎱 🏓 🏸 🥍 ⛳ 🎣 🎳 🥊 🥋 🏋️ 🏃 🚴 🏊 🤸 🧘 ⛷ 🏂 ⛸ 🛹 🎮 🕹 🎰 🎲 🧩 🎯 🪁 🎨 🖌 🎭 🎪 🎬 🎤 🎧 🎵 🎶 🎼 🎸 🎹 🥁 🎺 🎻 🪕 📷 📸 🎥 📹 🎞 🎫 🎟" },
+  { name: "자연·동물", list: "🌞 🌝 🌙 🌛 ⭐ 🌟 ✨ 💫 ☄️ ☀️ 🌤 ⛅ ☁️ 🌧 ⛈ 🌩 🌨 ❄️ ⛄ 🌬 🌪 🌫 🌈 🌊 💧 💦 🔥 🌍 🌏 🌎 🪐 🌱 🌿 🌲 🌳 🌴 🌵 🎋 🍃 🌷 🌸 🌹 🌺 🌻 🌼 💐 🍀 🍁 🍂 🍄 🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🐤 🦅 🦉 🦆 🐴 🦄 🐝 🦋 🐌 🐞 🐢 🐍 🐙 🦀 🐠 🐟 🐬 🐳 🦈 🐘 🦒 🐪" },
+  { name: "사람·감정", list: "😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😌 😍 🥰 😘 🤩 😎 🤓 🧐 🤔 🤨 😐 😑 😶 🙄 😏 😴 😪 🤤 😋 😛 😜 🤪 🤗 🤭 🤫 🤐 😬 😓 😥 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 🥳 🥺 😷 🤒 🤕 🤢 🤮 🤧 💪 👍 👎 👊 ✊ 🤝 👏 🙌 🙏 👆 👇 👈 👉 ✌️ 🤞 🤟 🤘 👋 🖐 ✋ 👀 👁 🧠 🦷 👅 👄 💋 ❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 💕 💞 💓 💗 💖 💘 💝" },
+  { name: "기호", list: "⭐ 💡 🔥 ⚡ ❗ ❕ ❓ ❔ ⚠️ 🚫 ⛔ ⭕ ❌ ✅ ☑️ ✔️ ➕ ➖ ➗ ✖️ 💯 🔒 🔓 🔐 🔑 🗝 🛡 🏆 🥇 🥈 🥉 🏅 🎖 👑 💎 🔮 ♻️ 🔱 📛 🔰 ⚜️ 〽️ ⁉️ 🆕 🆗 🆙 🆒 🆓 🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ 🟤 🟥 🟧 🟨 🟩 🟦 🟪 ⬛ ⬜ 🟫 🔶 🔷 🔸 🔹 🔺 🔻 💠 🔘 🏁 🚩 🎌 🏳️ 🏴" },
+];
 
-function openEmojiPop() {
-  if (!currentDoc) return;
+/** 지정한 페이지의 아이콘 선택기 — 제목 옆 버튼뿐 아니라 갤러리 카드·목록·링크의
+ *  아이콘을 클릭해도 바로 바꿀 수 있다. */
+function openEmojiPickerFor(pageId: string, anchor: HTMLElement) {
   emojiPop.innerHTML = "";
+  const apply = (em: string) => {
+    setPageIcon(pageId, em);
+    if (currentDoc?.id === pageId) paintIcon(em || undefined);
+    tree.render();
+    editor.refreshPageRefs();
+    emojiPop.classList.add("hidden");
+  };
   const clear = document.createElement("button");
   clear.className = "em-clear";
   clear.textContent = "아이콘 없음";
-  clear.addEventListener("click", () => {
-    applyIcon("");
-    emojiPop.classList.add("hidden");
-  });
+  clear.addEventListener("click", () => apply(""));
   emojiPop.appendChild(clear);
-  const grid = document.createElement("div");
-  grid.className = "em-grid";
-  for (const em of EMOJIS) {
-    const b = document.createElement("button");
-    b.textContent = em;
-    b.addEventListener("click", () => {
-      applyIcon(em);
-      emojiPop.classList.add("hidden");
-    });
-    grid.appendChild(b);
+  const scroll = document.createElement("div");
+  scroll.className = "em-scroll";
+  for (const sec of EMOJI_SECTIONS) {
+    const h = document.createElement("div");
+    h.className = "em-sec";
+    h.textContent = sec.name;
+    scroll.appendChild(h);
+    const grid = document.createElement("div");
+    grid.className = "em-grid";
+    for (const em of sec.list.split(" ")) {
+      if (!em) continue;
+      const b = document.createElement("button");
+      b.textContent = em;
+      b.addEventListener("click", () => apply(em));
+      grid.appendChild(b);
+    }
+    scroll.appendChild(grid);
   }
-  emojiPop.appendChild(grid);
-  const anchor = iconBtn.classList.contains("hidden") ? iconAdd : iconBtn;
+  emojiPop.appendChild(scroll);
   const r = anchor.getBoundingClientRect();
-  emojiPop.style.left = `${r.left}px`;
-  emojiPop.style.top = `${r.bottom + 6}px`;
+  emojiPop.style.left = `${Math.min(r.left, window.innerWidth - 320)}px`;
+  emojiPop.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 300)}px`;
   emojiPop.classList.remove("hidden");
 }
 
-function applyIcon(em: string) {
+function openEmojiPop() {
   if (!currentDoc) return;
-  setPageIcon(currentDoc.id, em);
-  paintIcon(em || undefined);
-  tree.render();
-  editor.refreshPageRefs();
+  const anchor = iconBtn.classList.contains("hidden") ? iconAdd : iconBtn;
+  openEmojiPickerFor(currentDoc.id, anchor);
 }
 
 iconBtn.addEventListener("click", (e) => {
